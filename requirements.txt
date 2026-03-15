@@ -1,0 +1,8 @@
+langchain>=1.2.0
+langchain-openai
+langgraph
+python-dotenv>=1.0.0
+duckduckgo-search>=7.0
+trafilatura>=2.0.0
+pydantic>=2.12.0
+pydantic-settings>=2.12.0
