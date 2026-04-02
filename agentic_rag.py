@@ -1,4 +1,5 @@
 import os
+import glob
 import logging
 from typing import Optional
 
@@ -48,7 +49,8 @@ class ExpandedContextResult(BaseModel):
 class RetrievalService:
     """
     Hybrid RAG retrieval backend backed by FAISS + BM25 + cross-encoder
-    reranking.  Exposes two methods designed to be wrapped as LangGraph
+    reranking.  Accepts a directory path and loads **all** PDF files found
+    inside it.  Exposes two methods designed to be wrapped as LangGraph
     tools for a search-agent:
 
         rag_search(query)                – hybrid retrieval
@@ -57,7 +59,7 @@ class RetrievalService:
 
     def __init__(
         self,
-        pdf_path: str,
+        pdf_dir: str,
         index_path: str = "./faiss_index",
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
@@ -69,7 +71,7 @@ class RetrievalService:
         bm25_weight: float = 0.4,
         vector_weight: float = 0.6,
     ):
-        self.pdf_path = pdf_path
+        self.pdf_dir = pdf_dir
         self.index_path = index_path
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
@@ -85,29 +87,42 @@ class RetrievalService:
         self._chunk_registry: dict[str, ChunkResult] = {}
         self._chunks_by_doc: dict[str, list[ChunkResult]] = {}
         self._reranking_retriever: Optional[ContextualCompressionRetriever] = None
-        self._doc_id: str = ""
 
         self._initialize()
 
     # ── Initialization ───────────────────────────────────────────────
 
-    def _initialize(self) -> None:
-        self._doc_id = os.path.splitext(os.path.basename(self.pdf_path))[0]
+    def _discover_pdfs(self) -> list[str]:
+        """Return sorted list of PDF file paths found in ``self.pdf_dir``."""
+        pattern = os.path.join(self.pdf_dir, "*.pdf")
+        pdf_files = sorted(glob.glob(pattern))
+        if not pdf_files:
+            raise FileNotFoundError(
+                f"No PDF files found in '{self.pdf_dir}'"
+            )
+        logger.info("Discovered %d PDF(s) in %s", len(pdf_files), self.pdf_dir)
+        return pdf_files
 
-        self._chunks = self._load_and_chunk()
+    def _initialize(self) -> None:
+        pdf_files = self._discover_pdfs()
+
+        for pdf_path in pdf_files:
+            self._chunks.extend(self._load_and_chunk(pdf_path))
+
         self._build_chunk_registry()
         self._build_retrievers()
 
-    def _load_and_chunk(self) -> list:
-        """Load PDF via PyPDFLoader and split with metadata preserved.
+    def _load_and_chunk(self, pdf_path: str) -> list:
+        """Load a single PDF via PyPDFLoader and split with metadata preserved.
 
-        Unlike the previous approach (concatenating all pages into one
-        string), ``split_documents`` keeps the per-page metadata that
-        PyPDFLoader attaches, so every chunk knows its source page.
+        ``split_documents`` keeps the per-page metadata that PyPDFLoader
+        attaches, so every chunk knows its source page.
         """
-        logger.info("Loading PDF: %s", self.pdf_path)
-        pages = PyPDFLoader(self.pdf_path).load()
-        logger.info("Loaded %d pages from %s", len(pages), self.pdf_path)
+        doc_id = os.path.splitext(os.path.basename(pdf_path))[0]
+
+        logger.info("Loading PDF: %s", pdf_path)
+        pages = PyPDFLoader(pdf_path).load()
+        logger.info("Loaded %d pages from %s", len(pages), pdf_path)
 
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
@@ -117,15 +132,15 @@ class RetrievalService:
 
         raw_chunks = splitter.split_documents(pages)
         total = len(raw_chunks)
-        logger.info("Created %d chunks (size=%d, overlap=%d)",
-                     total, self.chunk_size, self.chunk_overlap)
+        logger.info("Created %d chunks from %s (size=%d, overlap=%d)",
+                     total, pdf_path, self.chunk_size, self.chunk_overlap)
 
         for idx, chunk in enumerate(raw_chunks):
-            chunk.metadata["doc_id"] = self._doc_id
+            chunk.metadata["doc_id"] = doc_id
             chunk.metadata["chunk_index"] = idx
-            chunk.metadata["chunk_id"] = f"{self._doc_id}::chunk_{idx}"
+            chunk.metadata["chunk_id"] = f"{doc_id}::chunk_{idx}"
             chunk.metadata["total_chunks"] = total
-            chunk.metadata.setdefault("source", self.pdf_path)
+            chunk.metadata.setdefault("source", pdf_path)
 
         return raw_chunks
 
@@ -155,7 +170,10 @@ class RetrievalService:
 
     def _build_retrievers(self) -> None:
         """Wire up FAISS, BM25, ensemble, and cross-encoder reranker."""
-        embeddings = OpenAIEmbeddings(model=self.embedding_model)
+        embeddings = OpenAIEmbeddings(
+            model=self.embedding_model,
+            check_embedding_ctx_length=False,
+        )
         vectorstore = self._load_or_create_vectorstore(embeddings)
 
         bm25_retriever = BM25Retriever.from_documents(self._chunks)
@@ -185,15 +203,18 @@ class RetrievalService:
         )
 
     def _load_or_create_vectorstore(self, embeddings) -> FAISS:
-        if os.path.exists(self.index_path):
-            logger.info("Loading FAISS index from %s", self.index_path)
+        faiss_file = os.path.join(self.index_path, "index.faiss")
+        pkl_file = os.path.join(self.index_path, "index.pkl")
+
+        if os.path.isfile(faiss_file) and os.path.isfile(pkl_file):
+            logger.info("Loading existing FAISS index from %s", self.index_path)
             return FAISS.load_local(
                 self.index_path,
                 embeddings,
                 allow_dangerous_deserialization=True,
             )
 
-        logger.info("Building new FAISS index …")
+        logger.info("Building new FAISS index (%s not found) …", self.index_path)
         vectorstore = FAISS.from_documents(self._chunks, embeddings)
         vectorstore.save_local(self.index_path)
         logger.info("FAISS index saved to %s", self.index_path)
@@ -263,52 +284,3 @@ class RetrievalService:
             before=before_chunks,
             after=after_chunks,
         )
-
-
-# ── Runnable demo ───────────────────────────────────────────────────────
-
-
-def _demo() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    pdf_path = "./data/retrieval-augmented-generation.pdf"
-    service = RetrievalService(pdf_path=pdf_path)
-
-    # ── rag_search ──────────────────────────────────────────────────
-    query = "What is retrieval augmented generation?"
-    print(f"\n{'=' * 60}")
-    print(f"  rag_search({query!r})")
-    print(f"{'=' * 60}")
-
-    results = service.rag_search(query)
-    for r in results:
-        print(f"\n── {r.chunk_id}  |  page {r.page}  |  score {r.score}")
-        print(r.content[:300])
-
-    # ── expand_chunk_context ────────────────────────────────────────
-    if results:
-        target_id = results[0].chunk_id
-        print(f"\n{'=' * 60}")
-        print(f"  expand_chunk_context({target_id!r}, before=1, after=1)")
-        print(f"{'=' * 60}")
-
-        ctx = service.expand_chunk_context(target_id, before=1, after=1)
-
-        for c in ctx.before:
-            print(f"\n[BEFORE] {c.chunk_id}  |  page {c.page}")
-            print(c.content[:200])
-
-        print(f"\n[TARGET] {ctx.target.chunk_id}  |  page {ctx.target.page}")
-        print(ctx.target.content[:200])
-
-        for c in ctx.after:
-            print(f"\n[AFTER]  {c.chunk_id}  |  page {c.page}")
-            print(c.content[:200])
-
-
-if __name__ == "__main__":
-    _demo()
