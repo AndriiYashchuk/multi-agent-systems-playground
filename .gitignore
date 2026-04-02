@@ -27,3 +27,4 @@ env/
 .ruff_cache/
 
 *.ipynb_checkpoints/
+/faiss_index/
