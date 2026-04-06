@@ -1,4 +1,5 @@
 import logging
+import sys
 import uuid
 
 from config import settings
@@ -9,15 +10,13 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from agent import agent
 
-
-def main():
-    print("Research Agent (type 'exit' to quit)")
+def _run_agent_loop(agent, agent_name: str, recursion_limit: int = 15):
+    print(f"{agent_name} (type 'exit' to quit)")
     print("-" * 40)
 
     thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 15}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": recursion_limit}
 
     while True:
         try:
@@ -41,6 +40,17 @@ def main():
                 for msg in chunk["agent"]["messages"]:
                     if hasattr(msg, "content") and msg.content:
                         print(f"\nAgent: {msg.content}")
+
+
+def main():
+    mode = sys.argv[1] if len(sys.argv) > 1 else "research"
+
+    if mode == "search":
+        from rag_agent import search_agent, RECURSION_LIMIT
+        _run_agent_loop(search_agent, "Search Agent", recursion_limit=RECURSION_LIMIT)
+    else:
+        from agent import agent
+        _run_agent_loop(agent, "Research Agent", recursion_limit=15)
 
 
 if __name__ == "__main__":

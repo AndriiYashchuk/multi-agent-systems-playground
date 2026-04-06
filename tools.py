@@ -142,3 +142,57 @@ def read_url(url: str) -> str:
 
     logger.info("read_url returned %d chars from %s", len(text), url)
     return text
+
+
+_search_agent = None
+
+
+def _get_search_agent():
+    global _search_agent
+    if _search_agent is None:
+        from rag_agent import search_agent, RECURSION_LIMIT
+        _search_agent = (search_agent, RECURSION_LIMIT)
+    return _search_agent
+
+
+@tool
+def knowledge_search(query: str) -> str:
+    """Search the internal knowledge base (PDF documents) using an
+    autonomous search agent that performs hybrid retrieval with iterative
+    refinement (searching, expanding context of promising chunks, and
+    re-querying as needed).
+
+    Use this tool when the question is about RAG (Retrieval-Augmented Generation)
+    concepts, techniques, or architectures. The knowledge base contains detailed
+    information about RAG, so prefer this tool over web search for RAG-related queries.
+
+    Args:
+        query: Natural-language search query.
+    """
+    import uuid
+
+    logger.info("knowledge_search called — delegating to search agent: query=%r", query)
+
+    agent, recursion_limit = _get_search_agent()
+    config = {
+        "configurable": {"thread_id": uuid.uuid4().hex},
+        "recursion_limit": recursion_limit,
+    }
+
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": query}]},
+        config=config,
+    )
+
+    ai_messages = [
+        m for m in result["messages"]
+        if hasattr(m, "content") and m.content and m.type == "ai" and not m.tool_calls
+    ]
+
+    if ai_messages:
+        answer = ai_messages[-1].content
+    else:
+        answer = "The search agent could not produce an answer."
+
+    logger.info("knowledge_search: search agent returned %d chars", len(answer))
+    return _truncate(answer, settings.max_search_content_length, label="knowledge results")
