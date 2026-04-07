@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from config import settings
-from research_agent.prompt import SYSTEM_PROMPT
+from src.research_agent.prompt import SYSTEM_PROMPT
 from tools import knowledge_search, read_url, web_search
 
 load_dotenv()

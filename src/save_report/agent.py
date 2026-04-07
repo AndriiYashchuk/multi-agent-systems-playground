@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from config import settings
-from save_report.prompt import SYSTEM_PROMPT
+from src.save_report.prompt import SYSTEM_PROMPT
 from tools import list_files, read_file, write_report
 
 load_dotenv()

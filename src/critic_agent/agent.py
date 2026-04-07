@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from config import settings
-from critic_agent.prompt import SYSTEM_PROMPT
+from src.critic_agent.prompt import SYSTEM_PROMPT
 from tools import knowledge_search, read_url, web_search
 
 load_dotenv()

@@ -1,6 +1,6 @@
 from langchain.agents import create_agent
 from tools import web_search, knowledge_search 
-from planer_agent.prompt import SYSTEM_PROMPT
+from src.planer_agent.prompt import SYSTEM_PROMPT
 from langchain_openai import ChatOpenAI
 from config import settings
 from pydantic import BaseModel, Field

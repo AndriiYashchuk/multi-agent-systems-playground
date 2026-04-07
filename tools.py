@@ -135,8 +135,21 @@ def web_search(query: str) -> str:
 
     from ddgs import DDGS
 
-    results = DDGS().text(query, max_results=max_results)
+    try:
+        results = DDGS().text(query, max_results=max_results)
+    except Exception as e:
+        # DDGS raises when no results are found; surface this as a normal tool response.
+        logger.warning("web_search failed for query %r: %s", query, e)
+        if lane:
+            workflow_log.log_delegate_attachment_one_line("[search failed or no results]")
+        return f"No web search results found for query: {query}"
+
     logger.info("web_search returned %d results", len(results))
+    if not results:
+        if lane:
+            workflow_log.log_delegate_attachment_one_line("[0 results found]")
+        return f"No web search results found for query: {query}"
+
     if lane:
         workflow_log.log_delegate_attachment_one_line(f"[{len(results)} results found]")
     raw = "\n\n".join(
@@ -202,7 +215,7 @@ _planner_agent = None
 def _get_planner_agent():
     global _planner_agent
     if _planner_agent is None:
-        from planer_agent.agent import planner_agent as _planner
+        from src.planer_agent.agent import planner_agent as _planner
 
         _planner_agent = _planner
     return _planner_agent
@@ -214,7 +227,7 @@ _research_agent = None
 def _get_research_agent():
     global _research_agent
     if _research_agent is None:
-        from research_agent.agent import RECURSION_LIMIT, research_agent as _research
+        from src.research_agent.agent import RECURSION_LIMIT, research_agent as _research
 
         _research_agent = (_research, RECURSION_LIMIT)
     return _research_agent
@@ -226,7 +239,7 @@ _save_report_agent = None
 def _get_save_report_agent():
     global _save_report_agent
     if _save_report_agent is None:
-        from save_report.agent import RECURSION_LIMIT, save_report_agent as _saver
+        from src.save_report.agent import RECURSION_LIMIT, save_report_agent as _saver
 
         _save_report_agent = (_saver, RECURSION_LIMIT)
     return _save_report_agent
@@ -238,7 +251,7 @@ _critic_agent = None
 def _get_critic_agent():
     global _critic_agent
     if _critic_agent is None:
-        from critic_agent.agent import critic_agent as _critic
+        from src.critic_agent.agent import critic_agent as _critic
 
         _critic_agent = _critic
     return _critic_agent
@@ -271,10 +284,19 @@ def knowledge_search(query: str) -> str:
         "recursion_limit": recursion_limit,
     }
 
-    with workflow_log.knowledge_inner():
-        result = agent.invoke(
-            {"messages": [{"role": "user", "content": query}]},
-            config=config,
+    try:
+        with workflow_log.knowledge_inner():
+            result = agent.invoke(
+                {"messages": [{"role": "user", "content": query}]},
+                config=config,
+            )
+    except Exception as e:
+        logger.warning("knowledge_search failed for query %r: %s", query, e)
+        if workflow_log.get_lane():
+            workflow_log.log_delegate_attachment_one_line("[knowledge search failed]")
+        return (
+            "Knowledge-base search failed or hit an internal limit. "
+            "Try a narrower query or split the question into smaller parts."
         )
 
     ai_messages = [
@@ -322,7 +344,7 @@ def plan(request: str) -> str:
             config=config,
         )
 
-        from planer_agent.agent import ResearchPlan
+        from src.planer_agent.agent import ResearchPlan
 
         structured = result.get("structured_response")
         if structured is None:
@@ -382,10 +404,18 @@ def research(plan: str) -> str:
             "recursion_limit": recursion_limit,
         }
 
-        result = agent.invoke(
-            {"messages": [{"role": "user", "content": user_message}]},
-            config=config,
-        )
+        try:
+            result = agent.invoke(
+                {"messages": [{"role": "user", "content": user_message}]},
+                config=config,
+            )
+        except Exception as e:
+            logger.warning("research agent failed: %s", e)
+            workflow_log.log_delegate_attachment_one_line("[research agent failed]")
+            return (
+                "Research step failed or hit an internal limit. "
+                "Please retry with a shorter plan or fewer sub-questions."
+            )
 
         ai_messages = [
             m
@@ -424,7 +454,7 @@ def critique(original_request: str, research_findings: str) -> str:
         len(research_findings),
     )
 
-    from critic_agent.agent import CriticVerdict, RECURSION_LIMIT
+    from src.critic_agent.agent import CriticVerdict, RECURSION_LIMIT
 
     today = date.today().isoformat()
     user_message = (
