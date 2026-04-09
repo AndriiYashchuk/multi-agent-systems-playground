@@ -1,20 +1,22 @@
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.prebuilt import create_react_agent
 
 from config import settings
-from prompt import SYSTEM_PROMPT
-from tools import web_search, read_file, list_files, read_url, write_report, knowledge_search
+from src.save_report.prompt import SYSTEM_PROMPT
+from tools import list_files, read_file, write_report
 
 load_dotenv()
 
-tools = [web_search, read_file, list_files, read_url, write_report, knowledge_search]
+tools = [read_file, list_files, write_report]
 
 llm = ChatOpenAI(model=settings.model_name)
 checkpointer = InMemorySaver()
 
-agent = create_react_agent(
+RECURSION_LIMIT = 12
+
+save_report_agent = create_react_agent(
     model=llm,
     tools=tools,
     prompt=SYSTEM_PROMPT,

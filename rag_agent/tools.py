@@ -4,6 +4,7 @@ from typing import Optional
 from langchain_core.tools import tool
 
 from config import settings
+import workflow_log
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ _retrieval_service: Optional["RetrievalService"] = None
 def _get_retrieval_service():
     global _retrieval_service
     if _retrieval_service is None:
-        from agentic_rag import RetrievalService
+        from retrieval_service import RetrievalService
         logger.info("Initializing RetrievalService with dir=%s", settings.knowledge_data_dir)
         _retrieval_service = RetrievalService(pdf_dir=settings.knowledge_data_dir)
     return _retrieval_service
@@ -40,13 +41,20 @@ def search(query: str) -> str:
     """
     logger.info("search called: query=%r", query)
 
+    if workflow_log.is_knowledge_inner():
+        workflow_log.log_delegate_tool("search", repr(query))
+
     service = _get_retrieval_service()
     results = service.rag_search(query)
 
     if not results:
+        if workflow_log.is_knowledge_inner():
+            workflow_log.log_delegate_attachment_one_line("[0 chunks retrieved]")
         return "No relevant chunks found in the knowledge base."
 
     logger.info("search returned %d results for query=%r", len(results), query)
+    if workflow_log.is_knowledge_inner():
+        workflow_log.log_delegate_attachment_one_line(f"[{len(results)} chunks retrieved]")
 
     parts: list[str] = []
     for r in results:
@@ -74,10 +82,18 @@ def expand_chunk_context(chunk_id: str, before: int = 1, after: int = 1) -> str:
     logger.info("expand_chunk_context called: chunk_id=%r, before=%d, after=%d",
                 chunk_id, before, after)
 
+    if workflow_log.is_knowledge_inner():
+        workflow_log.log_delegate_tool(
+            "expand_chunk_context",
+            f"chunk_id={chunk_id!r}, before={before}, after={after}",
+        )
+
     service = _get_retrieval_service()
     try:
         result = service.expand_chunk_context(chunk_id, before=before, after=after)
     except ValueError as exc:
+        if workflow_log.is_knowledge_inner():
+            workflow_log.log_delegate_attachment_one_line(f"[error: {exc}]")
         return f"Error: {exc}"
 
     sections: list[str] = []
@@ -91,4 +107,7 @@ def expand_chunk_context(chunk_id: str, before: int = 1, after: int = 1) -> str:
         sections.append(f"[AFTER | chunk_id={chunk.chunk_id} | page={chunk.page}]\n{chunk.content}")
 
     output = "\n\n---\n\n".join(sections)
+    if workflow_log.is_knowledge_inner():
+        n = 1 + len(result.before) + len(result.after)
+        workflow_log.log_delegate_attachment_one_line(f"[expanded context; ~{n} sections, {len(output)} chars]")
     return _truncate(output, settings.max_search_content_length, label="expanded context")
