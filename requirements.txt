@@ -13,3 +13,4 @@ faiss-cpu
 pypdf
 rank-bm25
 sentence-transformers
+fastmcp>=3.0
